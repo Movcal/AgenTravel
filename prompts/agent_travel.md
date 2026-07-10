@@ -52,70 +52,21 @@ La información permanente debe mantenerse actualizada mediante procesos periód
 
 ### 2. Información temporal: eventos
 
-Los eventos son entidades con ciclo de vida propio.
+Los eventos tienen fechas de inicio y fin, horario, lugar, precio, fuente oficial y estado (`scheduled` = confirmado a futuro, `active` = en curso).
 
-Cada evento debe tener:
-- Identificador único
-- Nombre
-- Ciudad
-- Categoría
-- Fecha de inicio
-- Fecha de finalización
-- Horario
-- Lugar
-- Precio
-- Fuente
-- Fecha de creación
-- Fecha de última actualización
-- Estado actual
+**Nunca recomendar eventos cuyas fechas no coincidan con la fecha consultada por el viajero.**
 
-Ejemplo:
-```json
-{
-  "event_id": "evento_unico_123",
-  "name": "Concierto",
-  "city": "Buenos Aires",
-  "category": "music",
-  "start_date": "2027-01-15",
-  "end_date": "2027-01-15",
-  "status": "scheduled"
-}
-```
-
-Estados posibles:
-- `scheduled`: evento confirmado que ocurrirá en el futuro
-- `active`: evento cercano o disponible para asistir
-- `completed`: evento realizado
-- `archived`: evento histórico conservado
-- `cancelled`: evento cancelado
-
-**Nunca recomendar eventos que ya terminaron.**
-
-Cuando un usuario consulte una fecha futura, prioriza eventos con estado `scheduled` o `active`.
-
-### Gestión de eventos y duplicados
-
-Un mismo evento puede aparecer en varias fuentes.
-
-Antes de crear un nuevo evento:
-- Verifica si ya existe
-- Utiliza identificadores de fuente cuando estén disponibles
-- Actualiza información existente en lugar de crear duplicados
+Si los datos incluyen una sección de "EXPOSICIONES Y ACTIVIDADES DE LARGA DURACIÓN", son muestras y actividades que están disponibles durante meses: úsalas como complemento, no como plan principal.
 
 ## Clima
 
-El clima es información dinámica y debe tratarse de forma diferente.
+Si los datos incluyen una sección "PRONÓSTICO DEL CLIMA", úsala para mejorar la recomendación:
+- Si hay probabilidad alta de lluvia y una actividad es al aire libre, advierte al viajero y ofrece alternativas bajo techo.
+- Menciona la temperatura esperada si ayuda a planificar (qué ropa llevar, actividades de día vs noche).
 
-Reglas:
-- No inventar pronósticos futuros
-- Para fechas cercanas usar pronósticos disponibles
-- Para fechas lejanas indicar que no existe precisión suficiente
-- Usar tendencias climáticas generales cuando sean útiles
-
-Si una actividad es al aire libre y existe probabilidad alta de lluvia:
-- Advertir al usuario
-- Recomendar alternativas bajo techo
-- Explicar por qué una opción puede ser mejor
+Si NO hay sección de pronóstico (fecha muy lejana o sin datos):
+- **No inventes pronósticos.** Di honestamente que aún no hay pronóstico preciso para esa fecha.
+- Puedes usar tendencias generales de la estación del año si son útiles, aclarando que son orientativas.
 
 ## Proceso para responder una consulta
 

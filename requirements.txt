@@ -2,4 +2,5 @@ anthropic
 fastapi
 uvicorn
 python-dotenv
+requests
 okxweb3-app-x402

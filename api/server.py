@@ -8,10 +8,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from fastapi import FastAPI, Request, Query
 from fastapi.responses import JSONResponse
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from dotenv import load_dotenv
 import anthropic
 import unicodedata
+import re
+import requests
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
@@ -128,6 +130,72 @@ def find_city(conn, city: str):
     return None
 
 
+# Coordenadas para el pronostico del clima (Open-Meteo, gratis y sin API key)
+CITY_COORDS = {
+    "buenos aires":      (-34.6037, -58.3816),
+    "santiago de chile": (-33.4489, -70.6693),
+    "rio de janeiro":    (-22.9068, -43.1729),
+    "madrid":            (40.4168, -3.7038),
+    "paris":             (48.8566, 2.3522),
+    "new york city":     (40.7128, -74.0060),
+}
+
+WMO_CODES = {
+    0: "Despejado", 1: "Mayormente despejado", 2: "Parcialmente nublado", 3: "Nublado",
+    45: "Niebla", 48: "Niebla con escarcha",
+    51: "Llovizna ligera", 53: "Llovizna", 55: "Llovizna intensa",
+    61: "Lluvia ligera", 63: "Lluvia", 65: "Lluvia fuerte",
+    71: "Nieve ligera", 73: "Nieve", 75: "Nieve fuerte",
+    80: "Chubascos ligeros", 81: "Chubascos", 82: "Chubascos fuertes",
+    95: "Tormenta", 96: "Tormenta con granizo", 99: "Tormenta con granizo fuerte",
+}
+
+
+def get_weather_context(city_name: str, target_date: str | None) -> str:
+    """Pronostico del dia consultado via Open-Meteo. Nunca rompe la consulta:
+    si falla o la fecha esta fuera del horizonte de pronostico, devuelve
+    una nota o string vacio y el agente responde sin clima."""
+    coords = CITY_COORDS.get(normalize_text(city_name))
+    if not coords:
+        return ""
+    check = target_date or date.today().isoformat()
+    try:
+        days_ahead = (datetime.strptime(check, "%Y-%m-%d").date() - date.today()).days
+    except ValueError:
+        return ""
+    if days_ahead < 0:
+        return ""  # fecha pasada: no aplica pronostico
+    if days_ahead > 15:
+        return (
+            "\n=== PRONOSTICO DEL CLIMA ===\n"
+            f"La fecha {check} esta a mas de 16 dias: todavia no existe pronostico "
+            "confiable. No inventar clima; sugerir segun la estacion del anio.\n"
+        )
+    try:
+        resp = requests.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={
+                "latitude": coords[0], "longitude": coords[1],
+                "daily": "weathercode,temperature_2m_max,temperature_2m_min,precipitation_probability_max",
+                "timezone": "auto", "start_date": check, "end_date": check,
+            },
+            timeout=8,
+        )
+        resp.raise_for_status()
+        d = resp.json()["daily"]
+        desc = WMO_CODES.get(d["weathercode"][0], "Sin descripcion")
+        prob = d["precipitation_probability_max"][0]
+        lluvia = f"{prob}%" if prob is not None else "sin dato"
+        return (
+            "\n=== PRONOSTICO DEL CLIMA (fuente: Open-Meteo) ===\n"
+            f"{check}: {desc}. Temperatura: {d['temperature_2m_min'][0]}C a "
+            f"{d['temperature_2m_max'][0]}C. Probabilidad de lluvia: {lluvia}.\n"
+            "Usar para elegir entre actividades al aire libre o bajo techo.\n"
+        )
+    except Exception:
+        return ""
+
+
 def get_db_context(city: str, target_date: str | None) -> str:
     """Recupera lugares y eventos relevantes de la DB para el agente."""
     conn = get_connection()
@@ -143,35 +211,42 @@ def get_db_context(city: str, target_date: str | None) -> str:
     today = date.today().isoformat()
     check_date = target_date or today
 
-    # Eventos para esa fecha (o proximos 30 dias si no hay fecha especifica).
+    # Ventana de fechas: la fecha exacta consultada, o los proximos 30 dias.
+    if target_date:
+        range_start = range_end = check_date
+    else:
+        range_start = today
+        range_end   = (date.today() + timedelta(days=30)).isoformat()
+
+    # Eventos "reales" (duracion <= 1 anio): conciertos, partidos, funciones.
     # LIMIT 40: sin limite, ciudades como Paris matchean 700+ eventos por fecha
     # y el costo de Claude por consulta supera lo que se cobra.
-    # Se priorizan eventos de corta duracion (conciertos, partidos, funciones)
-    # sobre exposiciones que duran meses/anios, que son menos "evento".
     # Solo status scheduled/active: nunca recomendar cancelados ni archivados.
-    if target_date:
-        events = conn.execute('''
-            SELECT name, category, venue, time, price, ticket_source, is_free,
-                   start_date, end_date, target_audience, status, official_source
-            FROM events
-            WHERE city_id=? AND start_date <= ? AND end_date >= ?
-              AND status IN ('scheduled', 'active')
-            ORDER BY julianday(end_date) - julianday(start_date) ASC,
-                     is_free DESC, start_date
-            LIMIT 40
-        ''', (city_id, check_date, check_date)).fetchall()
-    else:
-        future_date = (date.today() + timedelta(days=30)).isoformat()
-        events = conn.execute('''
-            SELECT name, category, venue, time, price, ticket_source, is_free,
-                   start_date, end_date, target_audience, status, official_source
-            FROM events
-            WHERE city_id=? AND end_date >= ? AND start_date <= ?
-              AND status IN ('scheduled', 'active')
-            ORDER BY julianday(end_date) - julianday(start_date) ASC,
-                     is_free DESC, start_date
-            LIMIT 40
-        ''', (city_id, today, future_date)).fetchall()
+    base_where = '''city_id=? AND start_date <= ? AND end_date >= ?
+              AND status IN ('scheduled', 'active')'''
+    params = (city_id, range_end, range_start)
+
+    events = conn.execute(f'''
+        SELECT name, category, venue, time, price, ticket_source, is_free,
+               start_date, end_date, target_audience, status, official_source
+        FROM events
+        WHERE {base_where}
+          AND julianday(end_date) - julianday(start_date) <= 366
+        ORDER BY julianday(end_date) - julianday(start_date) ASC,
+                 is_free DESC, start_date
+        LIMIT 40
+    ''', params).fetchall()
+
+    # Exposiciones/actividades que duran mas de un anio: son casi "lugares".
+    # Van en seccion aparte y compacta para no inflar el contexto.
+    long_events = conn.execute(f'''
+        SELECT name, category, venue, price, is_free, end_date, ticket_source
+        FROM events
+        WHERE {base_where}
+          AND julianday(end_date) - julianday(start_date) > 366
+        ORDER BY is_free DESC, end_date
+        LIMIT 10
+    ''', params).fetchall()
 
     # Lugares permanentes
     places = conn.execute('''
@@ -203,6 +278,14 @@ def get_db_context(city: str, target_date: str | None) -> str:
         context += "=== SIN EVENTOS ESPECIFICOS PARA ESA FECHA ===\n"
         context += "(Mostrar lugares permanentes disponibles)\n"
 
+    if long_events:
+        context += f"\n=== EXPOSICIONES Y ACTIVIDADES DE LARGA DURACION ({len(long_events)}) ===\n"
+        for e in long_events:
+            context += (
+                f"- {e[0]} | {e[1]} | {e[2]} | Precio: {e[3]}"
+                f"{' | Gratuito' if e[4] else ''} | Hasta: {e[5]} | Link: {e[6]}\n"
+            )
+
     context += f"\n=== LUGARES PERMANENTES ({len(places)} disponibles) ===\n"
     for p in places:
         context += (
@@ -212,8 +295,10 @@ def get_db_context(city: str, target_date: str | None) -> str:
             f"  Precio: {p[5]} | Gratuito: {'Si' if p[9] else 'No'}\n"
             f"  Direccion: {p[6]}\n"
             f"  Web oficial: {p[8]} | Verificado: {p[11]}\n"
-            f"  Descripcion: {(p[2] or '')}\n"
+            f"  Descripcion: {(p[2] or '')[:220]}\n"
         )
+
+    context += get_weather_context(city_name, target_date)
 
     return context
 
@@ -229,6 +314,7 @@ def root():
         "description": "Agente turistico con recomendaciones personalizadas",
         "endpoints": {
             "GET /ask":    "Consulta de viaje (0.10 USDC via x402)",
+            "GET /stats":  "Estadisticas de eventos por ciudad/mes, incluye historial archivado",
             "GET /health": "Estado del servicio",
             "GET /cities": "Ciudades disponibles",
         },
@@ -244,29 +330,111 @@ def root():
 @app.get("/health")
 def health():
     conn = get_connection()
-    cities = conn.execute("SELECT name, country FROM cities").fetchall()
-    stats = []
-    for c in cities:
-        city_id = conn.execute(
-            "SELECT id FROM cities WHERE name=?", (c[0],)
-        ).fetchone()[0]
-        places = conn.execute(
-            "SELECT COUNT(*) FROM places WHERE city_id=?", (city_id,)
-        ).fetchone()[0]
-        events = conn.execute(
-            "SELECT COUNT(*) FROM events WHERE city_id=? AND end_date >= ?",
-            (city_id, date.today().isoformat())
-        ).fetchone()[0]
-        stats.append({"city": c[0], "country": c[1], "places": places, "upcoming_events": events})
-
-    return {"status": "ok", "cities": stats}
+    today = date.today().isoformat()
+    rows = conn.execute('''
+        SELECT c.name, c.country,
+               (SELECT COUNT(*) FROM places p WHERE p.city_id = c.id) AS places,
+               (SELECT COUNT(*) FROM events e
+                 WHERE e.city_id = c.id AND e.end_date >= ?
+                   AND e.status IN ('scheduled','active')) AS upcoming
+        FROM cities c ORDER BY c.name
+    ''', (today,)).fetchall()
+    conn.close()
+    return {"status": "ok", "cities": [
+        {"city": r[0], "country": r[1], "places": r[2], "upcoming_events": r[3]}
+        for r in rows
+    ]}
 
 
 @app.get("/cities")
 def cities():
     conn = get_connection()
     rows = conn.execute("SELECT name, country FROM cities ORDER BY name").fetchall()
+    conn.close()
     return {"cities": [{"name": r[0], "country": r[1]} for r in rows]}
+
+
+@app.get("/stats")
+def stats(
+    city:  str        = Query(...,  description="Ciudad a consultar (acepta sin acentos)"),
+    month: str | None = Query(None, description="Mes: '03', '3' o '2026-03'. Sin mes = todo el historial"),
+):
+    """
+    Estadisticas de eventos, incluyendo el archivo historico.
+    AgenTravel preserva los eventos pasados: esto responde preguntas como
+    'que venue tiene los mejores eventos en marzo' que un chat no puede responder.
+
+    Ejemplos:
+    - /stats?city=Buenos Aires&month=03      -> todos los marzos registrados
+    - /stats?city=Paris&month=2026-08        -> agosto 2026 especifico
+    - /stats?city=Madrid                     -> historial completo
+    """
+    conn = get_connection()
+    row = find_city(conn, city)
+    if not row:
+        conn.close()
+        return JSONResponse({"error": f"No hay datos para '{city}'"}, status_code=404)
+    city_id, city_name, country = row[0], row[1], row[2]
+
+    where  = "city_id=?"
+    params = [city_id]
+    period = "todo el historial"
+    if month:
+        m = month.strip()
+        if re.fullmatch(r"\d{4}-\d{2}", m):
+            where += " AND substr(start_date,1,7) = ?"
+            params.append(m)
+            period = m
+        elif re.fullmatch(r"\d{1,2}", m) and 1 <= int(m) <= 12:
+            mm = f"{int(m):02d}"
+            where += " AND substr(start_date,6,2) = ?"
+            params.append(mm)
+            period = f"mes {mm} (todos los años registrados)"
+        else:
+            conn.close()
+            return JSONResponse(
+                {"error": f"Mes invalido: '{month}'. Usar '03', '3' o '2026-03'."},
+                status_code=400,
+            )
+
+    total, free = conn.execute(
+        f"SELECT COUNT(*), COALESCE(SUM(is_free),0) FROM events WHERE {where}", params
+    ).fetchone()
+    by_category = [
+        {"category": r[0] or "Sin categoria", "events": r[1]}
+        for r in conn.execute(
+            f"SELECT category, COUNT(*) n FROM events WHERE {where} "
+            "GROUP BY category ORDER BY n DESC LIMIT 12", params)
+    ]
+    top_venues = [
+        {"venue": r[0] or "Sin venue", "events": r[1]}
+        for r in conn.execute(
+            f"SELECT venue, COUNT(*) n FROM events WHERE {where} "
+            "GROUP BY venue ORDER BY n DESC LIMIT 10", params)
+    ]
+    by_month = [
+        {"month": r[0], "events": r[1]}
+        for r in conn.execute(
+            f"SELECT substr(start_date,6,2) m, COUNT(*) n FROM events WHERE {where} "
+            "GROUP BY m ORDER BY m", params)
+    ]
+    rng = conn.execute(
+        f"SELECT MIN(start_date), MAX(start_date) FROM events WHERE {where}", params
+    ).fetchone()
+    conn.close()
+
+    return {
+        "city":            city_name,
+        "country":         country,
+        "period":          period,
+        "data_range":      {"from": rng[0], "to": rng[1]},
+        "total_events":    total,
+        "free_events":     free,
+        "by_category":     by_category,
+        "top_venues":      top_venues,
+        "events_by_month": by_month,
+        "note": "Incluye eventos historicos archivados: AgenTravel preserva el pasado para analisis de estacionalidad.",
+    }
 
 
 @app.get("/ask")
@@ -283,6 +451,17 @@ async def ask(
     - /ask?city=Santiago de Chile&query=que puedo hacer mañana con presupuesto limitado&date=2026-07-25
     - /ask?city=Buenos Aires&query=planes para el fin de semana con niños&date=2026-07-18
     """
+    # Validar fecha antes de cobrar trabajo: un date malformado compararia
+    # strings en silencio y devolveria resultados incorrectos.
+    if date is not None:
+        try:
+            datetime.strptime(date, "%Y-%m-%d")
+        except ValueError:
+            return JSONResponse(
+                {"error": f"Fecha invalida: '{date}'. Usar formato YYYY-MM-DD (ej: 2026-07-15)."},
+                status_code=400,
+            )
+
     # Obtener contexto de la DB
     context = get_db_context(city, date)
 
