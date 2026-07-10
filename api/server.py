@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from datetime import date, timedelta
 from dotenv import load_dotenv
 import anthropic
+import unicodedata
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
@@ -104,17 +105,37 @@ init_db()
 # ──────────────────────────────────────────────
 # Funciones de datos
 # ──────────────────────────────────────────────
+def normalize_text(s: str) -> str:
+    """Quita acentos y pasa a minusculas: 'París' -> 'paris'."""
+    return (
+        unicodedata.normalize("NFKD", s or "")
+        .encode("ascii", "ignore")
+        .decode()
+        .lower()
+        .strip()
+    )
+
+
+def find_city(conn, city: str):
+    """Busca la ciudad ignorando acentos y mayusculas ('Paris' encuentra 'París')."""
+    target = normalize_text(city)
+    if not target:
+        return None
+    for row in conn.execute("SELECT id, name, country FROM cities").fetchall():
+        name = normalize_text(row[1])
+        if target in name or name in target:
+            return row
+    return None
+
+
 def get_db_context(city: str, target_date: str | None) -> str:
     """Recupera lugares y eventos relevantes de la DB para el agente."""
     conn = get_connection()
 
-    # Buscar ciudad (flexible)
-    row = conn.execute(
-        "SELECT id, name, country FROM cities WHERE LOWER(name) LIKE LOWER(?)",
-        (f"%{city}%",)
-    ).fetchone()
+    row = find_city(conn, city)
 
     if not row:
+        conn.close()
         return f"No hay datos disponibles para '{city}' en la base de datos."
 
     city_id, city_name, country = row[0], row[1], row[2]
@@ -122,33 +143,45 @@ def get_db_context(city: str, target_date: str | None) -> str:
     today = date.today().isoformat()
     check_date = target_date or today
 
-    # Eventos para esa fecha (o proximos 30 dias si no hay fecha especifica)
+    # Eventos para esa fecha (o proximos 30 dias si no hay fecha especifica).
+    # LIMIT 40: sin limite, ciudades como Paris matchean 700+ eventos por fecha
+    # y el costo de Claude por consulta supera lo que se cobra.
+    # Se priorizan eventos de corta duracion (conciertos, partidos, funciones)
+    # sobre exposiciones que duran meses/anios, que son menos "evento".
+    # Solo status scheduled/active: nunca recomendar cancelados ni archivados.
     if target_date:
         events = conn.execute('''
             SELECT name, category, venue, time, price, ticket_source, is_free,
-                   start_date, end_date, target_audience, status
+                   start_date, end_date, target_audience, status, official_source
             FROM events
             WHERE city_id=? AND start_date <= ? AND end_date >= ?
-            ORDER BY is_free DESC, start_date, category
+              AND status IN ('scheduled', 'active')
+            ORDER BY julianday(end_date) - julianday(start_date) ASC,
+                     is_free DESC, start_date
+            LIMIT 40
         ''', (city_id, check_date, check_date)).fetchall()
     else:
         future_date = (date.today() + timedelta(days=30)).isoformat()
         events = conn.execute('''
             SELECT name, category, venue, time, price, ticket_source, is_free,
-                   start_date, end_date, target_audience, status
+                   start_date, end_date, target_audience, status, official_source
             FROM events
             WHERE city_id=? AND end_date >= ? AND start_date <= ?
-            ORDER BY is_free DESC, start_date, category
-            LIMIT 30
+              AND status IN ('scheduled', 'active')
+            ORDER BY julianday(end_date) - julianday(start_date) ASC,
+                     is_free DESC, start_date
+            LIMIT 40
         ''', (city_id, today, future_date)).fetchall()
 
     # Lugares permanentes
     places = conn.execute('''
         SELECT name, category, description, opening_hours, closed_days,
-               price, address, contact, official_website, is_free, target_audience
+               price, address, contact, official_website, is_free, target_audience,
+               last_verified
         FROM places WHERE city_id=?
         ORDER BY is_free DESC, name
     ''', (city_id,)).fetchall()
+    conn.close()
 
     context = f"DATOS DE LA BASE DE DATOS - {city_name}, {country}\n"
     context += f"Fecha consultada: {check_date}\n"
@@ -164,6 +197,7 @@ def get_db_context(city: str, target_date: str | None) -> str:
                 f"  Precio: {e[4]} | Gratuito: {'Si' if e[6] else 'No'}\n"
                 f"  Audiencia: {e[9]} | Estado: {e[10]}\n"
                 f"  Link: {e[5]}\n"
+                f"  Fuente oficial: {e[11] or e[5]}\n"
             )
     else:
         context += "=== SIN EVENTOS ESPECIFICOS PARA ESA FECHA ===\n"
@@ -177,6 +211,7 @@ def get_db_context(city: str, target_date: str | None) -> str:
             f"  Horarios: {p[3]} | Cerrado: {p[4]}\n"
             f"  Precio: {p[5]} | Gratuito: {'Si' if p[9] else 'No'}\n"
             f"  Direccion: {p[6]}\n"
+            f"  Web oficial: {p[8]} | Verificado: {p[11]}\n"
             f"  Descripcion: {(p[2] or '')}\n"
         )
 

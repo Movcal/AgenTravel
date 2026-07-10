@@ -96,7 +96,7 @@ def archive_past_events() -> int:
     today = date.today().isoformat()
     conn  = get_connection()
     cur   = conn.execute(
-        "UPDATE events SET status='completed' WHERE end_date < ? AND status='scheduled'",
+        "UPDATE events SET status='completed' WHERE end_date < ? AND status IN ('scheduled','active')",
         (today,)
     )
     conn.commit()
@@ -109,7 +109,7 @@ def cleanup_old_events(days: int = 30) -> int:
     cutoff = (date.today() - timedelta(days=days)).isoformat()
     conn   = get_connection()
     cur    = conn.execute(
-        "UPDATE events SET status='archived' WHERE end_date < ? AND status IN ('scheduled','completed')",
+        "UPDATE events SET status='archived' WHERE end_date < ? AND status IN ('scheduled','active','completed')",
         (cutoff,)
     )
     conn.commit()

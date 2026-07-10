@@ -122,6 +122,11 @@ def insert_place(city_id: int, place: dict) -> int:
     return place_id
 
 def insert_event(city_id: int, event: dict) -> int:
+    # Proteccion: si el importer trae las fechas invertidas, corregirlas.
+    # Un evento con start > end nunca matchea ninguna consulta por fecha.
+    start, end = event.get("start_date"), event.get("end_date")
+    if start and end and start > end:
+        event = {**event, "start_date": end, "end_date": start}
     conn = get_connection()
     # Verificar duplicado por event_id externo o nombre+fecha+lugar
     existing = None
