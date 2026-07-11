@@ -2,6 +2,9 @@
 .env
 testnet_client_wallet.json
 
+# Notas internas de trabajo (emails, IDs de cuenta, formulario) - repo publico
+knowledge/
+
 # Python
 __pycache__/
 *.pyc
