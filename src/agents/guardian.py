@@ -35,6 +35,7 @@ from agents.mnba_scl_importer             import import_mnba_scl
 # ── Rio de Janeiro ────────────────────────────────────────────────────
 from agents.futbol_rio_importer import import_futbol_rio
 from agents.ccbb_rio_importer   import import_ccbb_rio
+from agents.agenda_rio_importer import import_agenda_rio
 
 # ── Madrid ────────────────────────────────────────────────────────────
 from agents.futbol_madrid_importer import import_futbol_madrid
@@ -72,6 +73,7 @@ CITY_REFRESHERS = {
     "Rio de Janeiro": [
         import_futbol_rio,
         import_ccbb_rio,
+        import_agenda_rio,
     ],
     "Madrid": [
         import_futbol_madrid,
