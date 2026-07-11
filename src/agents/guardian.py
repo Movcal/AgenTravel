@@ -9,10 +9,10 @@ No tiene interaccion con usuarios. No crea ciudades nuevas.
 Se ejecuta via scheduler.py (cron diario).
 """
 import sys, os
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from db.database import init_db, get_connection
+from db.database import init_db, get_connection, set_meta
 
 # ── Buenos Aires ─────────────────────────────────────────────────────
 from agents.gcba_importer              import import_eventos_masivos
@@ -205,6 +205,10 @@ def run_guardian(refresh: bool = True, cities: list = None) -> None:
     stats_after = db_stats()
     for city, s in stats_after.items():
         print(f"    {city}: {s['places']} lugares, {s['upcoming_events']} eventos futuros")
+
+    # Registrar la corrida: /ask lo expone como "last_data_refresh" en el
+    # comprobante de investigacion (prueba de que los datos estan vivos).
+    set_meta("last_guardian_run", datetime.now().isoformat(timespec="seconds"))
 
     print(f"\n{'='*60}")
     print(f"  GUARDIAN completado: {now}")

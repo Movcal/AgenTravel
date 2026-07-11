@@ -17,7 +17,7 @@ import requests
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
-from db.database import init_db, get_connection
+from db.database import init_db, get_connection, get_meta
 
 # ──────────────────────────────────────────────
 # Configuracion x402
@@ -216,15 +216,33 @@ def get_weather_context(city_name: str, target_date: str | None) -> str:
         return ""
 
 
-def get_db_context(city: str, target_date: str | None) -> str:
-    """Recupera lugares y eventos relevantes de la DB para el agente."""
+def _domain(url: str | None) -> str | None:
+    """Extrae el dominio de una URL para contar fuentes distintas.
+    'https://www.teatrocolon.org.ar/es/agenda' -> 'teatrocolon.org.ar'."""
+    if not url or not isinstance(url, str):
+        return None
+    m = re.search(r"https?://([^/]+)", url.strip())
+    if not m:
+        return None
+    host = m.group(1).lower()
+    return host[4:] if host.startswith("www.") else host
+
+
+def get_db_context(city: str, target_date: str | None):
+    """Recupera lugares y eventos relevantes de la DB para el agente.
+    Devuelve (context_str, stats_dict). stats_dict alimenta el
+    'research_proof' deterministico que se agrega a la respuesta de /ask."""
+    empty_stats = {
+        "events_verified": 0, "permanent_exhibitions": 0,
+        "places_verified": 0, "official_sources": 0, "weather": None,
+    }
     conn = get_connection()
 
     row = find_city(conn, city)
 
     if not row:
         conn.close()
-        return f"No hay datos disponibles para '{city}' en la base de datos."
+        return f"No hay datos disponibles para '{city}' en la base de datos.", empty_stats
 
     city_id, city_name, country = row[0], row[1], row[2]
 
@@ -318,9 +336,35 @@ def get_db_context(city: str, target_date: str | None) -> str:
             f"  Descripcion: {(p[2] or '')[:220]}\n"
         )
 
-    context += get_weather_context(city_name, target_date)
+    weather_ctx = get_weather_context(city_name, target_date)
+    context += weather_ctx
 
-    return context
+    # Fuentes oficiales distintas que respaldan lo que entra al contexto:
+    # eventos (official_source o su link), exposiciones y webs de lugares.
+    sources = set()
+    for e in events:
+        d = _domain(e[11]) or _domain(e[5])   # official_source o Link
+        if d:
+            sources.add(d)
+    for e in long_events:
+        d = _domain(e[6])                      # ticket_source/link
+        if d:
+            sources.add(d)
+    for p in places:
+        d = _domain(p[8])                      # official_website
+        if d:
+            sources.add(d)
+
+    stats = {
+        "events_verified":       len(events),
+        "permanent_exhibitions": len(long_events),
+        "places_verified":       len(places),
+        "official_sources":      len(sources),
+        # Solo cuenta como "en vivo" el pronostico real, no la nota de >16 dias.
+        "weather": "Open-Meteo (live)" if "(fuente: Open-Meteo)" in weather_ctx else None,
+    }
+
+    return context, stats
 
 
 # ──────────────────────────────────────────────
@@ -502,8 +546,8 @@ async def ask(
         )
     conn.close()
 
-    # Obtener contexto de la DB
-    context = get_db_context(city, date)
+    # Obtener contexto de la DB (+ stats deterministicos para el comprobante)
+    context, stats = get_db_context(city, date)
 
     # Llamar al modelo
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
@@ -519,12 +563,32 @@ async def ask(
         )
         answer = response.content[0].text
 
+        # Comprobante de investigacion: metadata verificable, calculada por
+        # nosotros (no por Claude). Es el diferenciador visible vs un chat
+        # generico: cuantos eventos/lugares reales y de cuantas fuentes
+        # oficiales sale la respuesta, mas cuando se refresco la data.
+        research_proof = {
+            "events_verified":       stats["events_verified"],
+            "permanent_exhibitions": stats["permanent_exhibitions"],
+            "places_verified":       stats["places_verified"],
+            "official_sources":      stats["official_sources"],
+            "weather":               stats["weather"],
+            "coverage_note": (
+                "Built from AgenTravel's verified events database, "
+                "cross-checked against official sources with source links included."
+            ),
+        }
+        last_refresh = get_meta("last_guardian_run")
+        if last_refresh:
+            research_proof["last_data_refresh"] = last_refresh
+
         return JSONResponse({
-            "city":        city,
-            "date":        date,
-            "query":       query,
-            "response":    answer,
-            "data_source": "AgenTravel DB + Claude Sonnet 4.6",
+            "city":           city,
+            "date":           date,
+            "query":          query,
+            "response":       answer,
+            "research_proof": research_proof,
+            "data_source":    "AgenTravel DB + Claude Sonnet 4.6",
         })
 
     except Exception as e:

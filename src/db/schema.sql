@@ -56,6 +56,12 @@ CREATE TABLE IF NOT EXISTS events (
     FOREIGN KEY (city_id) REFERENCES cities(id)
 );
 
+-- Tabla clave/valor para metadata operativa (ej: ultima corrida del Guardian).
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
+
 -- Migraciones: agregar columnas si no existen (SQLite no soporta IF NOT EXISTS en ALTER)
 -- Se ejecutan desde database.py con try/except
 

@@ -42,6 +42,27 @@ def init_db():
     conn.close()
     print(f"Base de datos inicializada en: {os.path.abspath(DB_PATH)}")
 
+def set_meta(key: str, value: str) -> None:
+    """Guarda un par clave/valor en la tabla meta (upsert)."""
+    conn = get_connection()
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (key, value),
+    )
+    conn.commit()
+    conn.close()
+
+def get_meta(key: str) -> str | None:
+    """Lee un valor de la tabla meta. Devuelve None si no existe."""
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+    except Exception:
+        row = None
+    conn.close()
+    return row["value"] if row else None
+
 def get_or_create_city(name: str, country: str = None) -> int:
     conn = get_connection()
     row = conn.execute("SELECT id FROM cities WHERE LOWER(name) = LOWER(?)", (name,)).fetchone()
