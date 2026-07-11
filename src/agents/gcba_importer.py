@@ -50,7 +50,12 @@ def import_eventos_masivos(year: int = 2026):
     response = requests.get(url, timeout=30)
     response.raise_for_status()
 
-    content = response.content.decode("latin-1")
+    # El CSV del GCBA viene en UTF-8; decodificarlo como latin-1 corrompia
+    # las eñes y acentos ('NUÑEZ' -> 'NUÃ‘EZ'). Fallback por si cambian.
+    try:
+        content = response.content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        content = response.content.decode("latin-1")
     reader = csv.reader(io.StringIO(content), delimiter=";")
 
     init_db()
