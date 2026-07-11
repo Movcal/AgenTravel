@@ -1,0 +1,105 @@
+<!doctype html>
+<html>
+<head><style>html,body{margin:0;padding:0;background:transparent;overflow:hidden;}</style></head>
+<body>
+<svg width="1024" height="1024" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3D7DC8"/>
+      <stop offset="0.55" stop-color="#7EC3E8"/>
+      <stop offset="1" stop-color="#C9ECF7"/>
+    </linearGradient>
+    <linearGradient id="sea" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2BAFC9"/>
+      <stop offset="1" stop-color="#1E8FB0"/>
+    </linearGradient>
+    <clipPath id="badge"><rect x="8" y="8" width="496" height="496" rx="112"/></clipPath>
+  </defs>
+
+  <g clip-path="url(#badge)">
+    <!-- cielo -->
+    <rect x="0" y="0" width="512" height="512" fill="url(#sky)"/>
+
+    <!-- sol -->
+    <circle cx="430" cy="86" r="40" fill="#FFD166"/>
+    <circle cx="418" cy="76" r="12" fill="#FFE9A8"/>
+
+    <!-- nubes -->
+    <g fill="#FFFFFF" opacity="0.9">
+      <ellipse cx="120" cy="70" rx="34" ry="13"/>
+      <ellipse cx="148" cy="62" rx="24" ry="11"/>
+      <ellipse cx="330" cy="130" rx="28" ry="10" opacity="0.7"/>
+    </g>
+
+    <!-- montañas -->
+    <polygon points="-30,360 96,178 210,360" fill="#2E5F94"/>
+    <polygon points="96,178 72,214 96,228 120,214" fill="#EAF4FB"/>
+    <polygon points="110,360 214,232 320,360" fill="#3F7CB5"/>
+    <polygon points="214,232 194,258 214,268 234,258" fill="#EAF4FB"/>
+
+    <!-- mar -->
+    <rect x="0" y="340" width="512" height="172" fill="url(#sea)"/>
+    <g stroke="#BDEBF5" stroke-width="4" stroke-linecap="round" opacity="0.65" fill="none">
+      <path d="M40,382 q14,-7 28,0"/>
+      <path d="M120,404 q14,-7 28,0"/>
+      <path d="M330,392 q14,-7 28,0"/>
+    </g>
+
+    <!-- isla con palmera -->
+    <ellipse cx="424" cy="372" rx="66" ry="20" fill="#EFD9A7"/>
+    <path d="M424,372 C420,346 416,330 404,312" fill="none" stroke="#8B5A2B" stroke-width="8" stroke-linecap="round"/>
+    <g fill="#2FA05A">
+      <ellipse cx="382" cy="306" rx="26" ry="9" transform="rotate(-24 382 306)"/>
+      <ellipse cx="426" cy="304" rx="26" ry="9" transform="rotate(22 426 304)"/>
+      <ellipse cx="398" cy="292" rx="24" ry="9" transform="rotate(-62 398 292)"/>
+      <ellipse cx="416" cy="292" rx="24" ry="9" transform="rotate(58 416 292)"/>
+    </g>
+    <circle cx="398" cy="314" r="5" fill="#8B5A2B"/>
+    <circle cx="410" cy="318" r="5" fill="#8B5A2B"/>
+
+    <!-- playa donde esta el robot -->
+    <ellipse cx="240" cy="486" rx="230" ry="64" fill="#F2E3B6"/>
+
+    <!-- burbuja de pensamiento saliendo de la cabeza -->
+    <circle cx="282" cy="246" r="5.5" fill="#FFFFFF"/>
+    <circle cx="302" cy="224" r="8.5" fill="#FFFFFF"/>
+    <ellipse cx="350" cy="186" rx="48" ry="34" fill="#FFFFFF"/>
+    <!-- avion dentro de la burbuja: la idea del viaje -->
+    <g transform="translate(324,170)">
+      <polygon points="0,16 52,0 16,28" fill="#3D7DC8"/>
+      <polygon points="16,28 52,0 26,40" fill="#7EC3E8"/>
+      <polygon points="16,28 26,32 26,40" fill="#2E5F94"/>
+    </g>
+
+    <!-- robot pensando -->
+    <!-- piernas -->
+    <rect x="228" y="428" width="16" height="26" rx="7" fill="#C9D4DB"/>
+    <rect x="264" y="428" width="16" height="26" rx="7" fill="#C9D4DB"/>
+    <ellipse cx="236" cy="456" rx="14" ry="7" fill="#AEBCC6"/>
+    <ellipse cx="272" cy="456" rx="14" ry="7" fill="#AEBCC6"/>
+    <!-- cuerpo -->
+    <rect x="212" y="348" width="84" height="86" rx="22" fill="#F1F5F8" stroke="#C9D4DB" stroke-width="3"/>
+    <circle cx="254" cy="392" r="13" fill="#4FD1FF" opacity="0.85"/>
+    <circle cx="254" cy="392" r="6" fill="#1B3A5C"/>
+    <!-- brazo izquierdo caido -->
+    <path d="M216,362 q-16,18 -10,40" fill="none" stroke="#DDE6EC" stroke-width="14" stroke-linecap="round"/>
+    <!-- brazo derecho pensando (mano al menton) -->
+    <path d="M292,364 q22,2 18,-24" fill="none" stroke="#DDE6EC" stroke-width="14" stroke-linecap="round"/>
+    <circle cx="308" cy="336" r="9" fill="#DDE6EC"/>
+    <!-- cabeza -->
+    <rect x="202" y="258" width="104" height="84" rx="26" fill="#F1F5F8" stroke="#C9D4DB" stroke-width="3"/>
+    <rect x="214" y="276" width="80" height="48" rx="15" fill="#12324F"/>
+    <!-- ojos: uno normal y una ceja levantada pensando -->
+    <circle cx="238" cy="300" r="8" fill="#4FD1FF"/>
+    <circle cx="270" cy="300" r="8" fill="#4FD1FF"/>
+    <path d="M228,286 q10,-6 20,-2" fill="none" stroke="#4FD1FF" stroke-width="3.5" stroke-linecap="round"/>
+    <!-- antena -->
+    <line x1="254" y1="258" x2="254" y2="236" stroke="#C9D4DB" stroke-width="6" stroke-linecap="round"/>
+    <circle cx="254" cy="228" r="8" fill="#FF6B6B"/>
+    <!-- orejas -->
+    <rect x="192" y="286" width="12" height="26" rx="6" fill="#C9D4DB"/>
+    <rect x="304" y="286" width="12" height="26" rx="6" fill="#C9D4DB"/>
+  </g>
+</svg>
+</body>
+</html>
