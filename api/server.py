@@ -516,4 +516,6 @@ async def ask(
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=4021, reload=False)
+    # Railway (y cualquier PaaS) inyecta el puerto en $PORT. En local usa 4021.
+    port = int(os.getenv("PORT", "4021"))
+    uvicorn.run(app, host="0.0.0.0", port=port, reload=False)

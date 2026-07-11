@@ -1,0 +1,6 @@
+# Archivos temporales de scraping y wallets de prueba — no subir al deploy
+*.html
+river_tmp.js
+testnet_client_wallet.json
+__pycache__/
+*.pyc
