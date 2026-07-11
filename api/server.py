@@ -865,8 +865,57 @@ async def ask(
         )
 
 
+# ──────────────────────────────────────────────
+# Guardian embebido (scheduler en el mismo proceso)
+# ──────────────────────────────────────────────
+def _guardian_loop(hour: int):
+    """Corre el Guardian una vez al dia dentro del proceso del API.
+    Va en el MISMO proceso a proposito: asi escribe en el mismo archivo
+    SQLite que lee el API (dos servicios de Railway no comparten disco)."""
+    import time
+    from datetime import datetime as _dt, timedelta as _td
+    from agents.guardian import run_guardian
+
+    # Corrida inicial liviana al arrancar: archiva eventos ya vencidos
+    # (sin refrescar importers) para que /ask no muestre nada pasado.
+    try:
+        print("[Guardian-thread] Corrida inicial (solo archivar)...")
+        run_guardian(refresh=False)
+    except Exception as e:
+        print(f"[Guardian-thread] Error en corrida inicial: {e}")
+
+    while True:
+        now = _dt.now()
+        nxt = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+        if now >= nxt:
+            nxt += _td(days=1)
+        wait = (nxt - now).total_seconds()
+        print(f"[Guardian-thread] Proxima corrida completa: {nxt:%Y-%m-%d %H:%M}")
+        time.sleep(wait)
+        try:
+            run_guardian(refresh=True)   # refresca importers + archiva
+        except Exception as e:
+            print(f"[Guardian-thread] Error: {e}")
+        time.sleep(60)  # no re-disparar en el mismo minuto
+
+
+def start_guardian_thread():
+    """Arranca el Guardian en un hilo daemon si esta habilitado."""
+    if os.getenv("GUARDIAN_ENABLED", "1") == "0":
+        print("[Guardian-thread] Deshabilitado (GUARDIAN_ENABLED=0).")
+        return
+    import threading
+    hour = int(os.getenv("GUARDIAN_HOUR", "3"))
+    t = threading.Thread(target=_guardian_loop, args=(hour,), daemon=True)
+    t.start()
+    print(f"[Guardian-thread] Activo. Refresco diario a las {hour:02d}:00.")
+
+
 if __name__ == "__main__":
     import uvicorn
+    # El scheduler arranca solo aca (no al importar en tests): en Railway el
+    # startCommand es 'python api/server.py', asi que entra por este bloque.
+    start_guardian_thread()
     # Railway (y cualquier PaaS) inyecta el puerto en $PORT. En local usa 4021.
     port = int(os.getenv("PORT", "4021"))
     uvicorn.run(app, host="0.0.0.0", port=port, reload=False)

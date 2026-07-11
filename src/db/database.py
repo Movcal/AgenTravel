@@ -18,6 +18,10 @@ def get_connection():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # El Guardian corre en un hilo de fondo dentro del mismo proceso que el API:
+    # si una escritura coincide con una lectura, esperar hasta 5s en vez de
+    # tirar "database is locked".
+    conn.execute("PRAGMA busy_timeout = 5000")
     return conn
 
 def init_db():
