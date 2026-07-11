@@ -26,7 +26,9 @@ OKX_API_KEY    = os.getenv("OKX_API_KEY")
 OKX_SECRET_KEY = os.getenv("OKX_SECRET_KEY")
 OKX_PASSPHRASE = os.getenv("OKX_PASSPHRASE")
 PAY_TO_ADDRESS = os.getenv("PAY_TO_ADDRESS")
-NETWORK        = "eip155:196"   # X Layer Mainnet
+# X Layer: mainnet = eip155:196, testnet = eip155:1952
+# Se controla desde .env (X402_NETWORK) para probar sin plata real.
+NETWORK        = os.getenv("X402_NETWORK", "eip155:196")
 PRICE          = "$0.10"
 
 TRAVEL_SYSTEM_PROMPT = open(
@@ -61,6 +63,20 @@ def setup_x402():
         from x402.mechanisms.evm.exact.server import ExactEvmScheme
         from x402.server import x402ResourceServer
 
+        # El paquete Python (0.1.1) no trae la config de X Layer testnet;
+        # los SDKs oficiales de Go/TS si. Se agrega el mismo asset que usan
+        # ellos (USDT0 testnet) para que el precio "$0.10" se pueda convertir.
+        from x402.mechanisms.evm.constants import NETWORK_CONFIGS
+        NETWORK_CONFIGS.setdefault("eip155:1952", {
+            "chain_id": 1952,
+            "default_asset": {
+                "address": "0x9e29b3aada05bf2d2c827af80bd28dc0b9b4fb0c",
+                "name": "USD₮0",
+                "version": "1",
+                "decimals": 6,
+            },
+        })
+
         facilitator = OKXFacilitatorClient(
             OKXFacilitatorConfig(
                 auth=OKXAuthConfig(
@@ -74,6 +90,10 @@ def setup_x402():
 
         server = x402ResourceServer(facilitator)
         server.register(NETWORK, ExactEvmScheme())
+        # Sin initialize() toda request paga muere en 500 "Failed to process
+        # request": el server necesita consultar al facilitador que redes y
+        # esquemas soporta. Tambien valida las keys OKX al arrancar.
+        server.initialize()
 
         routes = {
             "GET /ask": RouteConfig(
