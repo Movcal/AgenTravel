@@ -478,9 +478,29 @@ async def ask(
             datetime.strptime(date, "%Y-%m-%d")
         except ValueError:
             return JSONResponse(
-                {"error": f"Fecha invalida: '{date}'. Usar formato YYYY-MM-DD (ej: 2026-07-15)."},
+                {"error": f"Invalid date: '{date}'. Use YYYY-MM-DD format (e.g. 2026-07-15). You were not charged for this request."},
                 status_code=400,
             )
+
+    # Validar ciudad antes de procesar: el middleware x402 NO liquida el pago
+    # en respuestas >= 400, asi que un 404 aca significa que el cliente no
+    # paga por una ciudad sin cobertura (y nosotros no llamamos a Claude).
+    conn = get_connection()
+    row = find_city(conn, city)
+    if not row:
+        available = [r[0] for r in conn.execute(
+            "SELECT name FROM cities ORDER BY name"
+        ).fetchall()]
+        conn.close()
+        return JSONResponse(
+            {
+                "error": f"City not available: '{city}'. You were not charged for this request.",
+                "available_cities": available,
+                "hint": "Check coverage for free at GET /cities before paying.",
+            },
+            status_code=404,
+        )
+    conn.close()
 
     # Obtener contexto de la DB
     context = get_db_context(city, date)
