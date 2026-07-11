@@ -1,5 +1,6 @@
 # Secretos - NUNCA commitear
 .env
+testnet_client_wallet.json
 
 # Python
 __pycache__/
