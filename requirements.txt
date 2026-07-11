@@ -3,4 +3,4 @@ fastapi
 uvicorn
 python-dotenv
 requests
-okxweb3-app-x402
+okxweb3-app-x402[evm]
