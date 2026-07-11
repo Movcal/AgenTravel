@@ -367,6 +367,228 @@ def get_db_context(city: str, target_date: str | None):
     return context, stats
 
 
+def get_weather_range(city_name: str, date_from: str, date_to: str) -> str:
+    """Pronostico dia por dia para un rango, en UNA sola llamada a Open-Meteo.
+    Solo pide dias dentro del horizonte de 16 dias; los posteriores llevan
+    una nota de 'no inventar'. Nunca rompe la consulta."""
+    coords = CITY_COORDS.get(normalize_text(city_name))
+    if not coords:
+        return ""
+    try:
+        d_from = datetime.strptime(date_from, "%Y-%m-%d").date()
+        d_to   = datetime.strptime(date_to, "%Y-%m-%d").date()
+    except ValueError:
+        return ""
+    today   = date.today()
+    horizon = today + timedelta(days=15)
+    api_from = max(d_from, today)
+    api_to   = min(d_to, horizon)
+
+    lines = []
+    if api_from <= api_to:
+        try:
+            resp = requests.get(
+                "https://api.open-meteo.com/v1/forecast",
+                params={
+                    "latitude": coords[0], "longitude": coords[1],
+                    "daily": "weathercode,temperature_2m_max,temperature_2m_min,precipitation_probability_max",
+                    "timezone": "auto",
+                    "start_date": api_from.isoformat(), "end_date": api_to.isoformat(),
+                },
+                timeout=8,
+            )
+            resp.raise_for_status()
+            d = resp.json()["daily"]
+            for i, day in enumerate(d["time"]):
+                desc = WMO_CODES.get(d["weathercode"][i], "Sin descripcion")
+                prob = d["precipitation_probability_max"][i]
+                lluvia = f"{prob}%" if prob is not None else "sin dato"
+                lines.append(
+                    f"{day}: {desc}. {d['temperature_2m_min'][i]}C a "
+                    f"{d['temperature_2m_max'][i]}C. Lluvia: {lluvia}."
+                )
+        except Exception:
+            lines = []
+
+    note = ""
+    if d_to > horizon:
+        note = (
+            f"Los dias posteriores a {horizon.isoformat()} estan fuera del horizonte "
+            "de pronostico (16 dias): no inventar clima para esos dias.\n"
+        )
+    if not lines and not note:
+        return ""
+    out = "\n=== PRONOSTICO DEL CLIMA POR DIA (fuente: Open-Meteo) ===\n"
+    if lines:
+        out += "\n".join(lines) + "\n"
+    out += note
+    out += "Usar el clima de cada dia para distribuir actividades (aire libre vs bajo techo).\n"
+    return out
+
+
+def get_db_context_range(city: str, date_from: str, date_to: str):
+    """Contexto para itinerario multi-dia. Devuelve (context_str, stats_dict).
+    Estructura: eventos que cubren todo el rango una sola vez (spanning),
+    luego un bloque por dia (=== DAY ... ===) con eventos especificos de esa
+    fecha, exposiciones largas y lugares una sola vez."""
+    empty_stats = {
+        "events_verified": 0, "permanent_exhibitions": 0,
+        "places_verified": 0, "official_sources": 0, "weather": None,
+    }
+    conn = get_connection()
+    row = find_city(conn, city)
+    if not row:
+        conn.close()
+        return f"No hay datos disponibles para '{city}' en la base de datos.", empty_stats
+    city_id, city_name, country = row[0], row[1], row[2]
+
+    today = date.today().isoformat()
+    d_from = datetime.strptime(date_from, "%Y-%m-%d").date()
+    d_to   = datetime.strptime(date_to, "%Y-%m-%d").date()
+    days = []
+    d = d_from
+    while d <= d_to:
+        days.append(d.isoformat())
+        d += timedelta(days=1)
+
+    status_ok = "status IN ('scheduled', 'active')"
+    short = "julianday(end_date) - julianday(start_date) <= 366"
+
+    # Spanning: eventos <= 1 anio que cubren TODO el rango (disponibles cualquier
+    # dia). Se listan una sola vez para no repetirlos en cada dia.
+    spanning = conn.execute(f'''
+        SELECT id, name, category, venue, time, price, ticket_source, is_free,
+               start_date, end_date, target_audience, official_source
+        FROM events
+        WHERE city_id=? AND start_date <= ? AND end_date >= ? AND {status_ok}
+          AND {short}
+        ORDER BY is_free DESC, name
+        LIMIT 15
+    ''', (city_id, date_from, date_to)).fetchall()
+
+    # Eventos especificos por dia: solapan ese dia, duran <= 1 anio y NO cubren
+    # todo el rango (esos ya estan en spanning). LIMIT 12/dia controla tokens.
+    per_day = {}
+    for day in days:
+        per_day[day] = conn.execute(f'''
+            SELECT id, name, category, venue, time, price, ticket_source, is_free,
+                   start_date, end_date, target_audience, official_source
+            FROM events
+            WHERE city_id=? AND start_date <= ? AND end_date >= ? AND {status_ok}
+              AND {short}
+              AND NOT (start_date <= ? AND end_date >= ?)
+            ORDER BY julianday(end_date) - julianday(start_date) ASC,
+                     is_free DESC, start_date
+            LIMIT 12
+        ''', (city_id, day, day, date_from, date_to)).fetchall()
+
+    # Exposiciones de larga duracion (> 1 anio) que tocan el rango: una vez.
+    long_events = conn.execute(f'''
+        SELECT name, category, venue, price, is_free, end_date, ticket_source
+        FROM events
+        WHERE city_id=? AND start_date <= ? AND end_date >= ? AND {status_ok}
+          AND julianday(end_date) - julianday(start_date) > 366
+        ORDER BY is_free DESC, end_date
+        LIMIT 10
+    ''', (city_id, date_to, date_from)).fetchall()
+
+    places = conn.execute('''
+        SELECT name, category, description, opening_hours, closed_days,
+               price, address, contact, official_website, is_free, target_audience,
+               last_verified
+        FROM places WHERE city_id=?
+        ORDER BY is_free DESC, name
+    ''', (city_id,)).fetchall()
+    conn.close()
+
+    context = f"DATOS DE LA BASE DE DATOS - {city_name}, {country}\n"
+    context += f"Rango consultado: {date_from} a {date_to} ({len(days)} dias)\n"
+    context += f"Hoy: {today}\n\n"
+
+    if spanning:
+        context += f"=== EVENTOS DISPONIBLES TODO EL RANGO ({len(spanning)}) ===\n"
+        context += "(Disponibles cualquier dia del viaje; repartilos, no los repitas todos los dias)\n"
+        for e in spanning:
+            context += (
+                f"\n- {e[1]}\n"
+                f"  Categoria: {e[2]} | Lugar: {e[3]}\n"
+                f"  Desde: {e[8]} Hasta: {e[9]} | Horario: {e[4]}\n"
+                f"  Precio: {e[5]} | Gratuito: {'Si' if e[7] else 'No'}\n"
+                f"  Audiencia: {e[10]}\n"
+                f"  Link: {e[6]}\n"
+                f"  Fuente oficial: {e[11] or e[6]}\n"
+            )
+
+    for day in days:
+        evs = per_day[day]
+        context += f"\n=== DAY {day} ({len(evs)} eventos especificos) ===\n"
+        if not evs:
+            context += "(Sin eventos especificos ese dia; usar spanning + lugares permanentes)\n"
+        for e in evs:
+            context += (
+                f"- {e[1]} | {e[2]} | {e[3]} | {e[8]}-{e[9]} | Horario: {e[4]} | "
+                f"Precio: {e[5]}{' | Gratuito' if e[7] else ''} | Link: {e[6]}\n"
+            )
+
+    if long_events:
+        context += f"\n=== EXPOSICIONES Y ACTIVIDADES DE LARGA DURACION ({len(long_events)}) ===\n"
+        for e in long_events:
+            context += (
+                f"- {e[0]} | {e[1]} | {e[2]} | Precio: {e[3]}"
+                f"{' | Gratuito' if e[4] else ''} | Hasta: {e[5]} | Link: {e[6]}\n"
+            )
+
+    context += f"\n=== LUGARES PERMANENTES ({len(places)} disponibles) ===\n"
+    context += "(Distribuir entre los dias; NO repetir un lugar en dos dias distintos)\n"
+    for p in places:
+        context += (
+            f"\n- {p[0]}\n"
+            f"  Categoria: {p[1]}\n"
+            f"  Horarios: {p[3]} | Cerrado: {p[4]}\n"
+            f"  Precio: {p[5]} | Gratuito: {'Si' if p[9] else 'No'}\n"
+            f"  Direccion: {p[6]}\n"
+            f"  Web oficial: {p[8]} | Verificado: {p[11]}\n"
+            f"  Descripcion: {(p[2] or '')[:220]}\n"
+        )
+
+    weather_ctx = get_weather_range(city_name, date_from, date_to)
+    context += weather_ctx
+
+    # Stats para research_proof: eventos cortos DISTINTOS (spanning + por dia),
+    # exposiciones largas, lugares y dominios oficiales distintos de todo el rango.
+    short_ids = {e[0] for e in spanning}
+    for day in days:
+        short_ids.update(e[0] for e in per_day[day])
+
+    sources = set()
+    for e in spanning:
+        dm = _domain(e[11]) or _domain(e[6])
+        if dm:
+            sources.add(dm)
+    for day in days:
+        for e in per_day[day]:
+            dm = _domain(e[11]) or _domain(e[6])
+            if dm:
+                sources.add(dm)
+    for e in long_events:
+        dm = _domain(e[6])
+        if dm:
+            sources.add(dm)
+    for p in places:
+        dm = _domain(p[8])
+        if dm:
+            sources.add(dm)
+
+    stats = {
+        "events_verified":       len(short_ids),
+        "permanent_exhibitions": len(long_events),
+        "places_verified":       len(places),
+        "official_sources":      len(sources),
+        "weather": "Open-Meteo (live)" if "(fuente: Open-Meteo)" in weather_ctx else None,
+    }
+    return context, stats
+
+
 # ──────────────────────────────────────────────
 # Endpoints
 # ──────────────────────────────────────────────
@@ -501,23 +723,59 @@ def stats(
     }
 
 
+# Itinerario multi-dia: tope de dias para que un rango largo no funda el
+# margen (mas dias = mas tokens de contexto que el ingreso fijo de $0.10).
+MAX_ITINERARY_DAYS = 5
+
+
 @app.get("/ask")
 async def ask(
-    request:  Request,
-    city:     str   = Query(...,  description="Ciudad a consultar (ej: Buenos Aires, Santiago de Chile)"),
-    query:    str   = Query(...,  description="Pregunta del viajero en lenguaje natural"),
-    date:     str | None = Query(None, description="Fecha en formato YYYY-MM-DD (opcional)"),
+    request:   Request,
+    city:      str   = Query(...,  description="Ciudad a consultar (ej: Buenos Aires, Santiago de Chile)"),
+    query:     str   = Query(...,  description="Pregunta del viajero en lenguaje natural"),
+    date:      str | None = Query(None, description="Fecha unica YYYY-MM-DD (opcional)"),
+    date_from: str | None = Query(None, description="Inicio del rango YYYY-MM-DD para itinerario multi-dia (opcional)"),
+    date_to:   str | None = Query(None, description="Fin del rango YYYY-MM-DD (opcional; max 5 dias, requiere date_from)"),
 ):
     """
     Consulta al agente de viajes. Costo: 0.10 USDC via x402 (X Layer).
 
-    Ejemplos:
-    - /ask?city=Santiago de Chile&query=que puedo hacer mañana con presupuesto limitado&date=2026-07-25
-    - /ask?city=Buenos Aires&query=planes para el fin de semana con niños&date=2026-07-18
+    Modo dia unico:
+    - /ask?city=Santiago de Chile&query=que hacer con presupuesto limitado&date=2026-07-25
+
+    Modo itinerario (rango, max 5 dias): pasar date_from y date_to (ignora date).
+    - /ask?city=Paris&query=itinerario para una pareja&date_from=2026-07-20&date_to=2026-07-23
     """
-    # Validar fecha antes de cobrar trabajo: un date malformado compararia
-    # strings en silencio y devolveria resultados incorrectos.
-    if date is not None:
+    # Modo rango: si viene date_from o date_to, se arma un itinerario y se
+    # ignora `date`. Se validan ANTES de cobrar (el pago no se liquida en >=400).
+    is_range = bool(date_from or date_to)
+    if is_range:
+        if not (date_from and date_to):
+            return JSONResponse(
+                {"error": "Provide both date_from and date_to for an itinerary (YYYY-MM-DD). You were not charged for this request."},
+                status_code=400,
+            )
+        try:
+            d_from = datetime.strptime(date_from, "%Y-%m-%d").date()
+            d_to   = datetime.strptime(date_to, "%Y-%m-%d").date()
+        except ValueError:
+            return JSONResponse(
+                {"error": "Invalid date_from/date_to. Use YYYY-MM-DD (e.g. 2026-07-20). You were not charged for this request."},
+                status_code=400,
+            )
+        if d_to < d_from:
+            return JSONResponse(
+                {"error": "date_to must be on or after date_from. You were not charged for this request."},
+                status_code=400,
+            )
+        n_days = (d_to - d_from).days + 1
+        if n_days > MAX_ITINERARY_DAYS:
+            return JSONResponse(
+                {"error": f"Itinerary range too long: {n_days} days. Maximum is {MAX_ITINERARY_DAYS} days. You were not charged for this request."},
+                status_code=400,
+            )
+    elif date is not None:
+        # Validar fecha unica: un date malformado compararia strings en silencio.
         try:
             datetime.strptime(date, "%Y-%m-%d")
         except ValueError:
@@ -546,8 +804,14 @@ async def ask(
         )
     conn.close()
 
-    # Obtener contexto de la DB (+ stats deterministicos para el comprobante)
-    context, stats = get_db_context(city, date)
+    # Obtener contexto de la DB (+ stats deterministicos para el comprobante).
+    # El itinerario trae mas contexto -> mas tokens de salida permitidos.
+    if is_range:
+        context, stats = get_db_context_range(city, date_from, date_to)
+        max_tokens = 3500
+    else:
+        context, stats = get_db_context(city, date)
+        max_tokens = 2048
 
     # Llamar al modelo
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
@@ -557,7 +821,7 @@ async def ask(
     try:
         response = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=2048,
+            max_tokens=max_tokens,
             system=TRAVEL_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_message}],
         )
@@ -584,7 +848,9 @@ async def ask(
 
         return JSONResponse({
             "city":           city,
-            "date":           date,
+            "date":           None if is_range else date,
+            "date_from":      date_from if is_range else None,
+            "date_to":        date_to if is_range else None,
             "query":          query,
             "response":       answer,
             "research_proof": research_proof,
@@ -593,7 +859,8 @@ async def ask(
 
     except Exception as e:
         return JSONResponse(
-            {"error": str(e), "city": city, "date": date},
+            {"error": str(e), "city": city, "date": date,
+             "date_from": date_from, "date_to": date_to},
             status_code=500
         )
 

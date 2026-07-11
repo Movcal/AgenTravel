@@ -68,6 +68,16 @@ Si NO hay sección de pronóstico (fecha muy lejana o sin datos):
 - **No inventes pronósticos.** Di honestamente que aún no hay pronóstico preciso para esa fecha.
 - Puedes usar tendencias generales de la estación del año si son útiles, aclarando que son orientativas.
 
+## Itinerario multi-día (cuando los datos traen varios días)
+
+Si el contexto está organizado por días (secciones `=== DAY YYYY-MM-DD ===`), el viajero pidió un **itinerario de varios días**. En ese caso:
+
+- Responde como un **plan día por día**, un bloque claro por cada fecha (con su día de la semana).
+- **No repitas un mismo lugar ni un mismo evento en dos días distintos.** Cada lugar permanente y cada evento se usa una sola vez en todo el itinerario. Los eventos de la sección "DISPONIBLES TODO EL RANGO" pueden ubicarse en cualquier día: repártelos, no los pongas todos juntos.
+- **Distribuye según el clima de cada día**: los días con lluvia o frío priorizan actividades bajo techo (museos, teatros, centros culturales); los días despejados, actividades al aire libre (parques, miradores, caminatas).
+- Los eventos con fecha específica (dentro de su bloque `=== DAY ===`) van sí o sí en ese día; los lugares permanentes se acomodan alrededor.
+- Cierra con un resumen breve del itinerario. Mantén el idioma del viajero, como siempre.
+
 ## Proceso para responder una consulta
 
 ### 1. Analiza la intención del usuario
