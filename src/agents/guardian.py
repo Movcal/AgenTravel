@@ -12,7 +12,7 @@ import sys, os
 from datetime import date, datetime, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from db.database import init_db, get_connection, set_meta
+from db.database import init_db, get_connection, set_meta, reset_write_stats, get_write_stats
 
 # ── Buenos Aires ─────────────────────────────────────────────────────
 from agents.gcba_importer              import import_eventos_masivos
@@ -152,7 +152,11 @@ def refresh_city(city_label: str) -> None:
     for fn in importers:
         name = getattr(fn, "__name__", "lambda")
         try:
+            reset_write_stats()
             fn()
+            s = get_write_stats()
+            print(f"    [OK] {name}: {s['events_inserted']} eventos nuevos, "
+                  f"{s['events_updated']} actualizados")
         except Exception as e:
             print(f"    [ERROR] {name}: {e}")
 

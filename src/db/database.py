@@ -3,6 +3,22 @@ import os
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "agentravel.db")
 
+# Contadores de escrituras de la corrida en curso. Reemplazan el print por
+# item de insert_event/insert_place: el refresco completo del Guardian mete
+# miles de eventos en segundos y Railway descarta logs al superar 500/seg,
+# lo que puede tapar errores reales. El Guardian imprime un resumen por importer.
+_write_stats = {"events_inserted": 0, "events_updated": 0,
+                "places_inserted": 0, "places_updated": 0}
+
+def reset_write_stats() -> None:
+    """Pone en cero los contadores de escritura (llamar antes de cada importer)."""
+    for k in _write_stats:
+        _write_stats[k] = 0
+
+def get_write_stats() -> dict:
+    """Devuelve una copia de los contadores de escritura actuales."""
+    return dict(_write_stats)
+
 def normalize_confidence(value: str) -> str:
     if not value:
         return "medium"
@@ -120,7 +136,7 @@ def insert_place(city_id: int, place: dict) -> int:
         )
         conn.commit()
         place_id = existing["id"]
-        print(f"  Actualizado: {place.get('name')}".encode('ascii','replace').decode())
+        _write_stats["places_updated"] += 1
     else:
         cur = conn.execute(
             """INSERT INTO places
@@ -142,7 +158,7 @@ def insert_place(city_id: int, place: dict) -> int:
         )
         conn.commit()
         place_id = cur.lastrowid
-        print(f"  Insertado: {place.get('name')}".encode('ascii','replace').decode())
+        _write_stats["places_inserted"] += 1
     conn.close()
     return place_id
 
@@ -186,7 +202,7 @@ def insert_event(city_id: int, event: dict) -> int:
         )
         conn.commit()
         event_id = existing["id"]
-        print(f"  Actualizado evento: {event.get('name')}".encode('ascii','replace').decode())
+        _write_stats["events_updated"] += 1
     else:
         cur = conn.execute(
             """INSERT INTO events
@@ -206,7 +222,7 @@ def insert_event(city_id: int, event: dict) -> int:
         )
         conn.commit()
         event_id = cur.lastrowid
-        print(f"  Insertado evento: {event.get('name')}".encode('ascii','replace').decode())
+        _write_stats["events_inserted"] += 1
     conn.close()
     return event_id
 
