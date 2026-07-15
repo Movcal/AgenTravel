@@ -2,7 +2,7 @@
 AgenTravel - Servidor FastAPI con x402 payment middleware.
 Cobra 0.10 USDC por consulta via X Layer (OKX).
 """
-import os, sys, json
+import os, sys, json, asyncio
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -810,13 +810,22 @@ async def _handle_ask(
         context, stats = get_db_context(city, date)
         max_tokens = 2048
 
-    # Llamar al modelo
-    client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    # Llamar al modelo. timeout=90s + max_retries=1 acotan el peor caso a
+    # ~180s (el cliente x402 solo espera 300s tras pagar); sin esto el SDK
+    # espera hasta 600s por intento x 3 intentos y el pago expira en silencio.
+    # asyncio.to_thread saca la llamada (sincronica/bloqueante) del event loop
+    # para que un pedido lento no congele el resto del servidor mientras espera.
+    client = anthropic.Anthropic(
+        api_key=os.getenv("ANTHROPIC_API_KEY"),
+        timeout=90.0,
+        max_retries=1,
+    )
 
     user_message = f"{context}\n\nPREGUNTA DEL VIAJERO: {query}"
 
     try:
-        response = client.messages.create(
+        response = await asyncio.to_thread(
+            client.messages.create,
             model="claude-sonnet-4-6",
             max_tokens=max_tokens,
             system=TRAVEL_SYSTEM_PROMPT,
