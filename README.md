@@ -53,6 +53,7 @@ arranca en modo sin pago (útil para desarrollo).
 ## Endpoints
 
 - `GET /ask?city=Paris&query=...&date=2026-07-15` — consulta al agente (0.10 USDC vía x402)
+- `POST /ask` — igual que el GET pero vía POST (los clientes x402 reenvían la petición pagada como POST); acepta los parámetros por body JSON (`{"city": ..., "query": ..., "date": ...}`) o query string
 - `GET /stats?city=Madrid&month=03` — estadísticas históricas por ciudad/mes (gratis)
 - `GET /cities` — ciudades disponibles
 - `GET /health` — estado del servicio

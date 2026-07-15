@@ -95,20 +95,27 @@ def setup_x402():
         # esquemas soporta. Tambien valida las keys OKX al arrancar.
         server.initialize()
 
+        # El matcheo de rutas del middleware es POR METODO: registrar solo
+        # "GET /ask" deja pasar el POST pagado sin verificar (el replay x402
+        # de los clientes llega como POST) y el router responde 405. Se
+        # protegen GET y POST explicitos (no comodin *, para no cobrar
+        # OPTIONS/HEAD).
+        ask_route = RouteConfig(
+            accepts=[
+                PaymentOption(
+                    scheme="exact",
+                    price=PRICE,
+                    network=NETWORK,
+                    pay_to=PAY_TO_ADDRESS,
+                    max_timeout_seconds=300,
+                ),
+            ],
+            description="AgenTravel - Recomendaciones turisticas personalizadas por ciudad y fecha",
+            mime_type="application/json",
+        )
         routes = {
-            "GET /ask": RouteConfig(
-                accepts=[
-                    PaymentOption(
-                        scheme="exact",
-                        price=PRICE,
-                        network=NETWORK,
-                        pay_to=PAY_TO_ADDRESS,
-                        max_timeout_seconds=300,
-                    ),
-                ],
-                description="AgenTravel - Recomendaciones turisticas personalizadas por ciudad y fecha",
-                mime_type="application/json",
-            ),
+            "GET /ask":  ask_route,
+            "POST /ask": ask_route,
         }
 
         app.add_middleware(PaymentMiddlewareASGI, routes=routes, server=server)
@@ -599,7 +606,7 @@ def root():
         "version":     "1.0.0",
         "description": "Agente turistico con recomendaciones personalizadas",
         "endpoints": {
-            "GET /ask":    "Consulta de viaje (0.10 USDC via x402)",
+            "GET|POST /ask": "Consulta de viaje (0.10 USDC via x402; POST acepta body JSON o query string)",
             "GET /stats":  "Estadisticas de eventos por ciudad/mes, incluye historial archivado",
             "GET /health": "Estado del servicio",
             "GET /cities": "Ciudades disponibles",
@@ -728,24 +735,14 @@ def stats(
 MAX_ITINERARY_DAYS = 5
 
 
-@app.get("/ask")
-async def ask(
-    request:   Request,
-    city:      str   = Query(...,  description="Ciudad a consultar (ej: Buenos Aires, Santiago de Chile)"),
-    query:     str   = Query(...,  description="Pregunta del viajero en lenguaje natural"),
-    date:      str | None = Query(None, description="Fecha unica YYYY-MM-DD (opcional)"),
-    date_from: str | None = Query(None, description="Inicio del rango YYYY-MM-DD para itinerario multi-dia (opcional)"),
-    date_to:   str | None = Query(None, description="Fin del rango YYYY-MM-DD (opcional; max 5 dias, requiere date_from)"),
-):
-    """
-    Consulta al agente de viajes. Costo: 0.10 USDC via x402 (X Layer).
-
-    Modo dia unico:
-    - /ask?city=Santiago de Chile&query=que hacer con presupuesto limitado&date=2026-07-25
-
-    Modo itinerario (rango, max 5 dias): pasar date_from y date_to (ignora date).
-    - /ask?city=Paris&query=itinerario para una pareja&date_from=2026-07-20&date_to=2026-07-23
-    """
+async def _handle_ask(
+    city:      str,
+    query:     str,
+    date:      str | None,
+    date_from: str | None,
+    date_to:   str | None,
+) -> JSONResponse:
+    """Logica compartida de /ask (la usan el GET y el POST pagado)."""
     # Modo rango: si viene date_from o date_to, se arma un itinerario y se
     # ignora `date`. Se validan ANTES de cobrar (el pago no se liquida en >=400).
     is_range = bool(date_from or date_to)
@@ -863,6 +860,58 @@ async def ask(
              "date_from": date_from, "date_to": date_to},
             status_code=500
         )
+
+
+@app.get("/ask")
+async def ask(
+    city:      str   = Query(...,  description="Ciudad a consultar (ej: Buenos Aires, Santiago de Chile)"),
+    query:     str   = Query(...,  description="Pregunta del viajero en lenguaje natural"),
+    date:      str | None = Query(None, description="Fecha unica YYYY-MM-DD (opcional)"),
+    date_from: str | None = Query(None, description="Inicio del rango YYYY-MM-DD para itinerario multi-dia (opcional)"),
+    date_to:   str | None = Query(None, description="Fin del rango YYYY-MM-DD (opcional; max 5 dias, requiere date_from)"),
+):
+    """
+    Consulta al agente de viajes. Costo: 0.10 USDC via x402 (X Layer).
+
+    Modo dia unico:
+    - /ask?city=Santiago de Chile&query=que hacer con presupuesto limitado&date=2026-07-25
+
+    Modo itinerario (rango, max 5 dias): pasar date_from y date_to (ignora date).
+    - /ask?city=Paris&query=itinerario para una pareja&date_from=2026-07-20&date_to=2026-07-23
+    """
+    return await _handle_ask(city, query, date, date_from, date_to)
+
+
+@app.post("/ask")
+async def ask_post(request: Request):
+    """
+    Igual que GET /ask pero via POST: los clientes x402 reenvian la peticion
+    pagada como POST con el header X-PAYMENT. Acepta los parametros por body
+    JSON y/o query string (el body pisa a la query) porque el formato exacto
+    del replay varia segun el cliente.
+    """
+    params: dict = dict(request.query_params)
+    try:
+        body = await request.json()
+        if isinstance(body, dict):
+            params.update({k: v for k, v in body.items() if v is not None})
+    except Exception:
+        pass  # sin body JSON valido: quedan solo los query params
+
+    city  = params.get("city")
+    query = params.get("query")
+    # Validar a mano (el POST no usa Query(...)): 400 antes de cobrar.
+    if not city or not query:
+        return JSONResponse(
+            {"error": "Missing required parameters: 'city' and 'query' (JSON body or query string). You were not charged for this request."},
+            status_code=400,
+        )
+
+    def _opt(key: str) -> str | None:
+        v = params.get(key)
+        return str(v) if v is not None else None
+
+    return await _handle_ask(str(city), str(query), _opt("date"), _opt("date_from"), _opt("date_to"))
 
 
 # ──────────────────────────────────────────────
