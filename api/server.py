@@ -458,6 +458,17 @@ def get_db_context_range(city: str, date_from: str, date_to: str):
         days.append(d.isoformat())
         d += timedelta(days=1)
 
+    # Cuantos mas dias tiene el rango, menos eventos por dia se traen: el
+    # prompt le pide a Claude curar cada vez mas compacto (ver agent_travel.md),
+    # asi que no tiene sentido inflar el contexto con detalle que no se va a usar.
+    n_days = len(days)
+    if n_days <= 5:
+        per_day_limit = 12
+    elif n_days <= 15:
+        per_day_limit = 5
+    else:
+        per_day_limit = 2
+
     status_ok = "status IN ('scheduled', 'active')"
     short = "julianday(end_date) - julianday(start_date) <= 366"
 
@@ -474,7 +485,7 @@ def get_db_context_range(city: str, date_from: str, date_to: str):
     ''', (city_id, date_from, date_to)).fetchall()
 
     # Eventos especificos por dia: solapan ese dia, duran <= 1 anio y NO cubren
-    # todo el rango (esos ya estan en spanning). LIMIT 12/dia controla tokens.
+    # todo el rango (esos ya estan en spanning). per_day_limit controla tokens.
     per_day = {}
     for day in days:
         per_day[day] = conn.execute(f'''
@@ -486,7 +497,7 @@ def get_db_context_range(city: str, date_from: str, date_to: str):
               AND NOT (start_date <= ? AND end_date >= ?)
             ORDER BY julianday(end_date) - julianday(start_date) ASC,
                      is_free DESC, start_date
-            LIMIT 12
+            LIMIT {per_day_limit}
         ''', (city_id, day, day, date_from, date_to)).fetchall()
 
     # Exposiciones de larga duracion (> 1 anio) que tocan el rango: una vez.
@@ -730,9 +741,12 @@ def stats(
     }
 
 
-# Itinerario multi-dia: tope de dias para que un rango largo no funda el
-# margen (mas dias = mas tokens de contexto que el ingreso fijo de $0.10).
-MAX_ITINERARY_DAYS = 5
+# Itinerario multi-dia: tope de seguridad contra rangos absurdos (ej. un ano),
+# no una limitacion real de uso -- un mes de viaje debe funcionar. El
+# contenido por dia se vuelve mas compacto cuanto mas largo es el rango
+# (ver get_db_context_range y prompts/agent_travel.md), asi que el costo de
+# contexto y de tokens de salida se mantiene acotado incluso cerca del tope.
+MAX_ITINERARY_DAYS = 30
 
 
 async def _handle_ask(
@@ -805,7 +819,13 @@ async def _handle_ask(
     # El itinerario trae mas contexto -> mas tokens de salida permitidos.
     if is_range:
         context, stats = get_db_context_range(city, date_from, date_to)
-        max_tokens = 3500
+        # Base 4500 (el modo "lujo" de 1-2 dias en ciudades con mucha data,
+        # ej. Paris, puede necesitar mas de 3500 igual) + margen por dia extra
+        # para rangos largos: aunque el prompt pide contenido cada vez mas
+        # compacto por dia, el modelo no siempre lo respeta al pie de la letra
+        # en ciudades con DB densa, asi que el techo de tokens es una red de
+        # seguridad, no el mecanismo principal de control de tamano.
+        max_tokens = min(4500 + max(0, n_days - 5) * 150, 8000)
     else:
         context, stats = get_db_context(city, date)
         # 3500 en vez de 2048: preguntas en lenguaje natural como "que hacer

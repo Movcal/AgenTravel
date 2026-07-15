@@ -19,7 +19,7 @@ print("chars de contexto:", len(ctx))
 # 2) Validaciones (sin Claude, no cobran)
 print("\n=== 2) Validaciones (400, sin cobro) ===")
 for params, label in [
-    ({"city": "Paris", "query": "x", "date_from": "2026-07-13", "date_to": "2026-07-25"}, "rango >5 dias"),
+    ({"city": "Paris", "query": "x", "date_from": "2026-07-01", "date_to": "2026-08-15"}, "rango >30 dias"),
     ({"city": "Paris", "query": "x", "date_from": "2026-07-15", "date_to": "2026-07-13"}, "to < from"),
     ({"city": "Paris", "query": "x", "date_from": "2026-07-13"}, "solo date_from"),
     ({"city": "Paris", "query": "x", "date_from": "bad", "date_to": "2026-07-15"}, "formato malo"),
