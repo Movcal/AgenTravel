@@ -828,11 +828,13 @@ async def _handle_ask(
         max_tokens = min(4500 + max(0, n_days - 5) * 150, 8000)
     else:
         context, stats = get_db_context(city, date)
-        # 3500 en vez de 2048: preguntas en lenguaje natural como "que hacer
-        # el fin de semana" empujan a Claude a planear varios dias aunque no
-        # se haya usado date_from/date_to, y con 2048 la respuesta se cortaba
-        # a mitad de frase.
-        max_tokens = 3500
+        # 4500 (subido de 2048, luego de 3500): preguntas en lenguaje natural
+        # como "que hacer el fin de semana" empujan a Claude a planear varios
+        # dias aunque no se haya usado date_from/date_to, y en ciudades con
+        # mucha data (Madrid, Paris) incluso una consulta de un solo dia puede
+        # necesitar mas de 3500 tokens de salida -- se confirmo con pruebas
+        # reales que Madrid se cortaba a mitad de URL con 3500.
+        max_tokens = 4500
 
     # Llamar al modelo. timeout=90s + max_retries=1 acotan el peor caso a
     # ~180s (el cliente x402 solo espera 300s tras pagar); sin esto el SDK
