@@ -808,7 +808,11 @@ async def _handle_ask(
         max_tokens = 3500
     else:
         context, stats = get_db_context(city, date)
-        max_tokens = 2048
+        # 3500 en vez de 2048: preguntas en lenguaje natural como "que hacer
+        # el fin de semana" empujan a Claude a planear varios dias aunque no
+        # se haya usado date_from/date_to, y con 2048 la respuesta se cortaba
+        # a mitad de frase.
+        max_tokens = 3500
 
     # Llamar al modelo. timeout=90s + max_retries=1 acotan el peor caso a
     # ~180s (el cliente x402 solo espera 300s tras pagar); sin esto el SDK
