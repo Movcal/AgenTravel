@@ -59,7 +59,7 @@ def setup_x402():
             PaymentOption,
         )
         from x402.http.middleware.fastapi import PaymentMiddlewareASGI
-        from x402.http.types import RouteConfig
+        from x402.http.types import HTTPResponseBody, RouteConfig
         from x402.mechanisms.evm.exact.server import ExactEvmScheme
         from x402.server import x402ResourceServer
 
@@ -110,8 +110,30 @@ def setup_x402():
                     max_timeout_seconds=300,
                 ),
             ],
-            description="AgenTravel - Recomendaciones turisticas personalizadas por ciudad y fecha",
+            description=(
+                "AgenTravel - AI travel recommendations. POST JSON body with "
+                "required fields 'city' and 'query'; optional 'date' "
+                "(YYYY-MM-DD) or 'date_from'+'date_to' for a day-by-day "
+                "itinerary. Covered cities at GET /cities (free)."
+            ),
             mime_type="application/json",
+            # El body del 402 era {} y el primer intento de los compradores
+            # fallaba con 400 por no saber que campos mandar. Ahora el
+            # pre-flight documenta el contrato del endpoint.
+            unpaid_response_body=lambda ctx: HTTPResponseBody(
+                content_type="application/json",
+                body={
+                    "message": "Payment required. Retry with the x402 payment header and a JSON body.",
+                    "required_body_fields": ["city", "query"],
+                    "optional_body_fields": ["date", "date_from", "date_to"],
+                    "example_body": {
+                        "city": "Madrid",
+                        "query": "What can I do this weekend?",
+                        "date": "2026-07-18",
+                    },
+                    "covered_cities_endpoint": "/cities",
+                },
+            ),
         )
         routes = {
             "GET /ask":  ask_route,
@@ -850,9 +872,16 @@ async def _handle_ask(
     user_message = f"{context}\n\nPREGUNTA DEL VIAJERO: {query}"
 
     try:
+        # Haiku 4.5 (16 jul): Sonnet 4.6 generaba a ~49 tok/s y una consulta
+        # tipica tardaba 47-60s end-to-end; los clientes x402 de los
+        # compradores cortan la conexion antes (4 intentos del jurado fallaron
+        # como "connection error" sin dejar rastro en logs: uvicorn cancela el
+        # request al desconectarse el cliente y no liquida el pago). Haiku
+        # genera a ~91 tok/s -> respuesta total ~20-25s, dentro de cualquier
+        # ventana razonable. Misma DB, mismo prompt; ademas baja ~3x el costo.
         response = await asyncio.to_thread(
             client.messages.create,
-            model="claude-sonnet-4-6",
+            model="claude-haiku-4-5-20251001",
             max_tokens=max_tokens,
             system=TRAVEL_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_message}],
